@@ -17,9 +17,12 @@
 #define RESET 0x10              // Arbitrarily chosen value assignment for reset
 #define SET   0x11              // Arbitrarily chosen value assignment for setting sampling rate
 #define CAN_BAUDRATE 250000
+//#define FLOWMETER_PIN 2         // Arbitrarily chosen pin for flowmeter hardware interrupt
+
 
 IntervalTimer fm_timer;         // flowmeter timer instance
 static CAN_message_t out_msg;   // message instance for tx
+
 
 // Initialize shared variables
 uint32_t sampling_period = DEFAULT_SR;
@@ -33,7 +36,7 @@ static void meas_flow()
   // 2. set the new measurement flag
   
   // Simple increment for now, please replace with 
-  // appropriate sampling code
+  // appropriate sampling code (i.e. isr_flowmeter below)
   flow_counter++;
   new_meas = 1;
   Serial.println(flow_counter);
@@ -68,9 +71,18 @@ static void handle_cmd(uint8_t *cmdPtr)
   }
 }
 
+/* Uncomment me for harware interrupt enable */
+//void isr_flowmeter(_
+//{
+//  flow_counter ++;
+//}
 // -------------------------------------------------------------
 void setup(void)
 {
+   /* Uncomment me for harwdare interrupt */
+//  pinMode(FLOWMETER_PIN, INPUT);
+//  attachInterrupt(FLOWMETER_PIN, isr_flowmeter, FALLING);
+  
   delay(1000);
   Serial.println(F("Hello naive Flowmeter"));  
   
