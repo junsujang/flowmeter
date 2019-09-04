@@ -15,31 +15,37 @@
 #define DEVICE_ID 0x100         // Arbitrarily chosen device ID for now
 #define MSG_LEN 8               // (bytes) 32-bit long counter value
 #define RESET 0x10              // Arbitrarily chosen value assignment for reset
-#define SET   0x11              // Arbitrarily chosen value assignment for setting sampling rate
+#define SET   0x11              // Arbitrarily chosen value assignment for setting sampling rate (us)
 #define CAN_BAUDRATE 250000
 //#define FLOWMETER_PIN 2         // Arbitrarily chosen pin for flowmeter hardware interrupt
 
 
 IntervalTimer fm_timer;         // flowmeter timer instance
 static CAN_message_t out_msg;   // message instance for tx
-
+static uint32_t D1 = 16;
+static uint32_t D2 = 39;
 
 // Initialize shared variables
 uint32_t sampling_period = DEFAULT_SR;
-volatile uint32_t flow_counter = 0;
-volatile uint8_t new_meas = 0;  // flag for new measurement
+volatile uint32_t flow_counter1 = 0;
+volatile uint32_t flow_counter2 = 0;
+volatile uint32_t sample1 = 0;
+volatile uint32_t sample2 = 0;
+
+volatile uint8_t fSendData = 0;  // flag for new measurement
 
 // -------------------------------------------------------------
-static void meas_flow()
+static void heartbeat_interrupt()
 {
-  // 1. Measure the flow and store the value
+  // 1. Sample the flow and store the value
   // 2. set the new measurement flag
   
-  // Simple increment for now, please replace with 
-  // appropriate sampling code (i.e. isr_flowmeter below)
-  flow_counter++;
-  new_meas = 1;
-  Serial.println(flow_counter);
+  cli();
+  sample1 = flow_counter1;
+  sample2 = flow_counter2;
+  sei();
+  fSendData = 1;
+  Serial.println(sample1);
 }
 
 // -------------------------------------------------------------
@@ -55,48 +61,57 @@ static void handle_cmd(uint8_t *cmdPtr)
   // Reset counter
   if (cmd == RESET)
   {
-    flow_counter = 0;
-    new_meas = 0;
+    flow_counter1 = 0;
+    flow_counter2 = 0;
+    fSendData = 0;
+    fm_timer.begin(heartbeat_interrupt, sampling_period);
     Serial.println("reset the flowmeter");
   }
   else if (cmd == SET)
   {
     uint32_t new_sr = 0;
     for(int i = 1; i < 5; i++) {
+      // Little endian
       new_sr = (new_sr << 4) | cmdPtr[i];
     }
-    fm_timer.update(new_sr);
+    sampling_period = new_sr;
+    fm_timer.update(sampling_period);
     Serial.print("Updated the sampling rate to ");
-    Serial.println(new_sr);
+    Serial.println(sampling_period);
   }
 }
 
 /* Uncomment me for harware interrupt enable */
-//void isr_flowmeter(_
-//{
-//  flow_counter ++;
-//}
+static void isr_flowmeter1()
+{
+  Serial.println("Data 1 ISR");
+  flow_counter1++;
+}
+
+static void isr_flowmeter2() {
+  Serial.println("Data 2 ISR");
+  flow_counter2++;
+}
+
 // -------------------------------------------------------------
 void setup(void)
 {
-   /* Uncomment me for harwdare interrupt */
-//  pinMode(FLOWMETER_PIN, INPUT);
-//  attachInterrupt(FLOWMETER_PIN, isr_flowmeter, FALLING);
-  
   delay(1000);
   Serial.println(F("Hello naive Flowmeter"));  
-  
+
+  // Setup data GPIO Pins
+  pinMode(D1, INPUT_PULLUP);
+  attachInterrupt(D1, isr_flowmeter1, FALLING);
+  pinMode(D2, INPUT_PULLUP);
+  attachInterrupt(D2, isr_flowmeter2, FALLING);
+
   // Initialize the CAN-bus instance for communication
   Can0.begin(CAN_BAUDRATE);
-//  //if using enable pins on a transceiver they need to be set on
-//  pinMode(2, OUTPUT);
-//
-//  digitalWrite(2, HIGH);
 
-  // Extension for 11bits or 29bits long ID
+  // Extension 0 for 11bits or 1 for 29bits long ID
   out_msg.ext = 0;
   out_msg.id = DEVICE_ID; 
-  // Send out 8-bits long message everytime
+  // Send out 8-bytes long message everytime
   out_msg.len = MSG_LEN;
   // Initialize the msg buffer to all nulls
   for (int i = 0; i < MSG_LEN; i++) {
@@ -104,7 +119,7 @@ void setup(void)
   }
 
   // Initialize the interval timer instance for sampling
-  fm_timer.begin(meas_flow, sampling_period);
+  fm_timer.begin(heartbeat_interrupt, sampling_period);
 }
 
 // -------------------------------------------------------------
@@ -121,17 +136,18 @@ void loop(void)
     handle_cmd(inMsg.buf);
   }
   
-  if (new_meas)
+  if (fSendData)
   {
     Serial.println("new mas");
     // the library restricts 8bit max per msg
     // New counter is available, transmit as heartbeat
     for (int i = 0; i < 4; i++)
     {
-      out_msg.buf[3-i] = (flow_counter >> (4*i)) & 0xFF;
+      out_msg.buf[3-i] = (sample1 >> (4*i)) & 0xFF;
+      out_msg.buf[7-i] = (sample2 >> (4*i)) & 0xFF;
     }
     Can0.write(out_msg);
     // Reset the new measurement flag
-    new_meas = 0;
+    fSendData = 0;
   }
 }
